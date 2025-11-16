@@ -1,0 +1,3 @@
+venv/
+YOLO*.pt
+yolo_weights/
