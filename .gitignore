@@ -1,0 +1,19 @@
+# Python virtual environments
+venv/
+env/
+*/site-packages/
+multiple_person_dance_game_env/
+
+# Compiled libs
+*.so
+*.dll
+*.dylib
+
+# Model weights
+*.pt
+*.onnx
+*.tflite
+*.pth
+
+# Cache
+__pycache__/
