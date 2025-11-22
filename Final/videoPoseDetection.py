@@ -1,10 +1,10 @@
 # videoPoseDetection.py
 """
-Precompute tutorial video keypoints + joint angles using YOLOv8 Pose.
+Precompute tutorial video keypoints + full-body joint angles using YOLOv8 Pose.
 
-Outputs:
-- precomputed/<song>_reference_angles.npy      (T, J)
-- precomputed/<song>_reference_keypoints.npy  (T, 17, 2)
+Outputs (for each song):
+- precomputed/<song>_reference_angles.npy      (T, J)   → angles
+- precomputed/<song>_reference_keypoints.npy  (T, 17, 2) → raw keypoints
 """
 
 import os
@@ -12,73 +12,89 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-# Path to YOLOv8 pose weights (put the .pt file here)
+# -------------------------------------------------------------
+# YOLOv8 Pose Model
+# -------------------------------------------------------------
 MODEL_PATH = "yolo_weights/yolov8s-pose.pt"
-
-# Load YOLOv8 model once
 _MODEL = YOLO(MODEL_PATH)
 
-# ============================================================
-#  JOINT LIST AND ANGLE COMPUTATION
-# ============================================================
 
-# COCO keypoint indices (0–16)
-# We'll compute angles at elbows and knees:
-# 5-7-9 : left elbow, 6-8-10 : right elbow
-# 11-13-15 : left knee, 12-14-16 : right knee
+# -------------------------------------------------------------
+# 17-JOINT BEGINNER-FRIENDLY ANGLE SET
+# -------------------------------------------------------------
+# These around 14–16 angles give stable, full-body evaluation.
 ANGLE_TRIPLETS = [
+    # Arms
     (5, 7, 9),      # left elbow
     (6, 8, 10),     # right elbow
+    (7, 5, 6),      # left upper arm vs shoulders
+    (8, 6, 5),      # right upper arm vs shoulders
+
+    # Legs
     (11, 13, 15),   # left knee
     (12, 14, 16),   # right knee
+    (13, 11, 12),   # left thigh vs hips
+    (14, 12, 11),   # right thigh vs hips
+
+    # Torso / Shoulders / Hips
+    (5, 6, 12),     # shoulder line angle
+    (6, 5, 11),     # opposite shoulder angle
+    (11, 5, 6),     # torso twist left
+    (12, 6, 5),     # torso twist right
+    (5, 11, 12),    # hip angle left
+    (6, 12, 11),    # hip angle right
+
+    # Head orientation vs shoulders
+    (0, 5, 6),      # head → shoulders line
 ]
 
 
+# -------------------------------------------------------------
+# Angle Computation
+# -------------------------------------------------------------
 def _joint_angle(a, b, c):
     """
-    Compute angle ABC (in degrees) given points a, b, c (2D).
+    Compute angle ABC (in degrees) given points a, b, c.
+    Safe for missing/zero joints.
     """
+    if np.all(a == 0) or np.all(b == 0) or np.all(c == 0):
+        return 0.0
+
     ba = a - b
     bc = c - b
-    num = np.dot(ba, bc)
-    den = np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-6
-    cos_angle = np.clip(num / den, -1.0, 1.0)
-    return float(np.degrees(np.arccos(cos_angle)))
+
+    den = np.linalg.norm(ba) * np.linalg.norm(bc)
+    if den < 1e-6:
+        return 0.0
+
+    cos_val = np.clip(np.dot(ba, bc) / den, -1.0, 1.0)
+    return float(np.degrees(np.arccos(cos_val)))
 
 
 def keypoints_to_angles(kpts):
     """
-    Convert full set of 17 keypoints (x,y) to our joint angles.
-
-    Args:
-        kpts: np.ndarray of shape (17, 2)
-    Returns:
-        np.ndarray of shape (J,) where J = len(ANGLE_TRIPLETS)
+    Convert 17 YOLO keypoints into our angle feature vector.
+    Returns shape (J,) where J = len(ANGLE_TRIPLETS)
     """
-    angles = []
-    for i, j, k in ANGLE_TRIPLETS:
-        a, b, c = kpts[i], kpts[j], kpts[k]
-        angles.append(_joint_angle(a, b, c))
-    return np.array(angles, dtype=np.float32)
+    J = len(ANGLE_TRIPLETS)
+    out = np.zeros(J, dtype=np.float32)
+
+    # Safety: YOLO sometimes returns incomplete array
+    if kpts is None or len(kpts) < 17:
+        return out
+
+    for idx, (i, j, k) in enumerate(ANGLE_TRIPLETS):
+        out[idx] = _joint_angle(kpts[i], kpts[j], kpts[k])
+
+    return out
 
 
-# ============================================================
-#  PRECOMPUTE FUNCTION
-# ============================================================
-
+# -------------------------------------------------------------
+# PRECOMPUTE: Keypoints + Angles for Entire Video
+# -------------------------------------------------------------
 def precompute_video_angles(video_path, out_dir="precomputed"):
     """
-    Run YOLOv8 pose over the entire tutorial video and store:
-        - per-frame joint angles
-        - per-frame 17 keypoints
-
-    Args:
-        video_path (str): path to tutorial video
-        out_dir (str): directory for .npy files
-
-    Returns:
-        angles: np.ndarray (T, J)
-        keypoints: np.ndarray (T, 17, 2)
+    Process full tutorial video → save angles + keypoints.
     """
     os.makedirs(out_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(video_path))[0]
@@ -86,16 +102,16 @@ def precompute_video_angles(video_path, out_dir="precomputed"):
     out_angles = os.path.join(out_dir, f"{base}_reference_angles.npy")
     out_keypoints = os.path.join(out_dir, f"{base}_reference_keypoints.npy")
 
-    # Load from cache if both files exist
+    # Already computed?
     if os.path.exists(out_angles) and os.path.exists(out_keypoints):
-        print(f"[precompute] Using cached angles + keypoints for {base}")
+        print(f"[precompute] Loaded cached → {base}")
         return np.load(out_angles), np.load(out_keypoints)
 
     print(f"[precompute] Processing video: {video_path}")
     cap = cv2.VideoCapture(video_path)
 
-    all_angles = []
-    all_keypoints = []
+    ang_list = []
+    kpt_list = []
 
     while True:
         ret, frame = cap.read()
@@ -105,46 +121,48 @@ def precompute_video_angles(video_path, out_dir="precomputed"):
         results = _MODEL(frame, conf=0.3, verbose=False)
 
         if len(results) == 0 or results[0].keypoints is None:
-            # No detection → zeros (so frame can be ignored in scoring)
-            all_angles.append(np.zeros(len(ANGLE_TRIPLETS), dtype=np.float32))
-            all_keypoints.append(np.zeros((17, 2), dtype=np.float32))
+            kpts = np.zeros((17, 2), dtype=np.float32)
+            angs = np.zeros(len(ANGLE_TRIPLETS), dtype=np.float32)
         else:
-            # Take the first detected person
-            kpts = results[0].keypoints.xy[0].cpu().numpy()  # (17, 2)
-            all_keypoints.append(kpts)
-            all_angles.append(keypoints_to_angles(kpts))
+            xy = results[0].keypoints.xy
+            if xy is None or xy.numel() == 0:
+                kpts = np.zeros((17, 2), dtype=np.float32)
+                angs = np.zeros(len(ANGLE_TRIPLETS), dtype=np.float32)
+            else:
+                kpts = xy[0].cpu().numpy()
+                angs = keypoints_to_angles(kpts)
+
+        kpt_list.append(kpts)
+        ang_list.append(angs)
 
     cap.release()
 
-    angles = np.stack(all_angles)      # (T, J)
-    keypoints = np.stack(all_keypoints)  # (T, 17, 2)
+    # Stack final arrays
+    keypoints = np.stack(kpt_list)       # (T,17,2)
+    angles = np.stack(ang_list)          # (T,J)
 
     np.save(out_angles, angles)
     np.save(out_keypoints, keypoints)
 
-    print(f"[precompute] Saved angles   → {out_angles}")
-    print(f"[precompute] Saved kpts     → {out_keypoints}")
-    print(f"[precompute] Frames: {angles.shape[0]}, joints: {angles.shape[1]}")
+    print(f"[precompute] saved angles   → {out_angles}")
+    print(f"[precompute] saved keypoints → {out_keypoints}")
+    print(f"[precompute] frames: {angles.shape[0]} | joints: {angles.shape[1]}")
+
     return angles, keypoints
 
-def precompute_video_keypoints(video_path, out_dir="precomputed"):
-    """
-    Extract full keypoints (17,2) for each frame of the video.
-    Saves to .npy so we can reuse them for FAST playback.
 
-    Returns:
-        keypoints_arr: np.ndarray of shape (T, 17, 2)
-        out_path: str (saved .npy path)
-    """
+# -------------------------------------------------------------
+# Optional: Only Keypoints
+# -------------------------------------------------------------
+def precompute_video_keypoints(video_path, out_dir="precomputed"):
     os.makedirs(out_dir, exist_ok=True)
+
     base = os.path.splitext(os.path.basename(video_path))[0]
     out_path = os.path.join(out_dir, f"{base}_keypoints.npy")
 
-    # load cached
     if os.path.exists(out_path):
-        kpts = np.load(out_path)
-        print(f"[precompute] Loaded cached keypoints from {out_path}")
-        return kpts, out_path
+        print(f"[precompute] Loaded cached keypoints → {out_path}")
+        return np.load(out_path), out_path
 
     cap = cv2.VideoCapture(video_path)
     all_kpts = []
@@ -155,26 +173,32 @@ def precompute_video_keypoints(video_path, out_dir="precomputed"):
             break
 
         results = _MODEL(frame, conf=0.3, verbose=False)
+
         if len(results) == 0 or results[0].keypoints is None:
-            all_kpts.append(np.zeros((17,2), dtype=np.float32))
+            k = np.zeros((17, 2), dtype=np.float32)
         else:
-            k = results[0].keypoints.xy[0].cpu().numpy()  # (17,2)
-            all_kpts.append(k)
+            xy = results[0].keypoints.xy
+            if xy is None or xy.numel() == 0:
+                k = np.zeros((17, 2), dtype=np.float32)
+            else:
+                k = xy[0].cpu().numpy()
+
+        all_kpts.append(k)
 
     cap.release()
-    keypoints_arr = np.stack(all_kpts, axis=0)  # (T,17,2)
-    np.save(out_path, keypoints_arr)
-    print(f"[precompute] Saved keypoints {keypoints_arr.shape} → {out_path}")
-    return keypoints_arr, out_path
+
+    arr = np.stack(all_kpts)
+    np.save(out_path, arr)
+    print(f"[precompute] saved keypoints {arr.shape} → {out_path}")
+
+    return arr, out_path
 
 
-# ============================================================
-#  CLI TEST
-# ============================================================
-
+# -------------------------------------------------------------
+# CLI Testing
+# -------------------------------------------------------------
 if __name__ == "__main__":
     import argparse
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--video", type=str, required=True)
     args = parser.parse_args()

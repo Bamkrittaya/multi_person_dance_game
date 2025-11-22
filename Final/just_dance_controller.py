@@ -3,17 +3,17 @@
 import os
 import cv2
 import numpy as np
-from threading import Thread
 from ultralytics import YOLO
 import pygame
 
 from videoPoseDetection import (
     precompute_video_angles,
     keypoints_to_angles,
-    ANGLE_TRIPLETS,
+    ANGLE_TRIPLETS,  # now full-body angle set
 )
 
-ANGLE_TOLERANCE = 45.0  # degrees, lower = stricter
+# Beginner-friendly: larger tolerance → easier scoring
+ANGLE_TOLERANCE = 45  # degrees, higher = more forgiving
 MODEL_PATH = "yolo_weights/yolov8s-pose.pt"
 
 # Path to countdown video (5 sec, e.g. "3-2-1-start")
@@ -168,6 +168,8 @@ class JustDanceController:
             return 0.0
 
         diff = np.abs(ref_joint[mask] - player_joint[mask])
+
+        # Beginner mode: larger tolerance → easier
         sim = np.clip(1.0 - diff / ANGLE_TOLERANCE, 0.0, 1.0)
         return float(sim.mean() * 100.0)
 
@@ -241,6 +243,9 @@ class JustDanceController:
             if not ret_cam:
                 print("[game] Webcam ended or not available.")
                 break
+
+            # Mirror webcam for display + YOLO (safe for angles)
+            frame_cam = cv2.flip(frame_cam, 1)
 
             # --- YOLO on webcam: crash-proof ---
             results = self.model(frame_cam, conf=0.3, verbose=False)

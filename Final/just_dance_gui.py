@@ -5,15 +5,13 @@ from tkinter import messagebox
 import os
 
 from just_dance_controller import JustDanceController
+from just_dance_controller_2p import JustDanceController2P
 from just_dance_score import save_score
 from just_dance_gui_score import Score
 from path_helper import get_fast_paths
 from auto_optimize_videos import optimize_song
 
 
-
-# List of songs the player can choose.
-# Left: label on the GUI, Right: ORIGINAL video path.
 SONGS = [
     ("Call Me Maybe", "videos/callmemaybe.mp4"),
     ("Cheap Thrills", "videos/cheapthrills.mp4"),
@@ -28,123 +26,151 @@ class JustDanceGUI(tk.Tk):
         super().__init__()
         self.title("Just Dance – YOLO Edition")
         self.geometry("500x400")
-
-        self._build_widgets()
-
-    def _build_widgets(self):
-        title = tk.Label(
-            self,
-            text="Just Dance – YOLO Pose",
-            font=("Helvetica", 20, "bold"),
-        )
+        self._build_widgets() 
+    
+    def _build_widgets(self): 
+        title = tk.Label( self, text="Just Dance – YOLO Pose", font=("Helvetica", 20, "bold"), ) 
         title.pack(pady=10)
 
-        # Player name
-        frame_name = tk.Frame(self)
-        frame_name.pack(pady=5)
-        tk.Label(frame_name, text="Player name:").pack(side="left", padx=5)
-        self.entry_name = tk.Entry(frame_name, width=25)
-        self.entry_name.pack(side="left", padx=5)
+        # store selections
+        self.num_players = 1
+        self.player1 = ""
+        self.player2 = ""
+        self.selected_song = None
 
-        # Song list
-        tk.Label(self, text="Choose a song:").pack(pady=5)
+        # Start at STEP 1
+        self.show_step1_choose_players()
+
+    # ============================================================
+    # STEP 1 — Select 1 or 2 players
+    # ============================================================
+    def show_step1_choose_players(self):
+        self.clear_window()
+
+        tk.Label(self, text="How many players?", font=("Helvetica", 18, "bold")).pack(pady=20)
+
+        self.num_players_var = tk.IntVar(value=1)
+
+        tk.Radiobutton(self, text="1 Player", variable=self.num_players_var, value=1,
+                       font=("Helvetica", 14)).pack(pady=5)
+        tk.Radiobutton(self, text="2 Players", variable=self.num_players_var, value=2,
+                       font=("Helvetica", 14)).pack(pady=5)
+
+        tk.Button(self, text="Next", font=("Helvetica", 14),
+                  command=self.go_step2_names).pack(pady=20)
+
+    # ============================================================
+    # STEP 2 — Enter player name(s)
+    # ============================================================
+    def go_step2_names(self):
+        self.num_players = self.num_players_var.get()
+        self.clear_window()
+
+        tk.Label(self, text="Enter Player Name(s)", font=("Helvetica", 18, "bold")).pack(pady=20)
+
+        # Player 1
+        frame1 = tk.Frame(self)
+        frame1.pack(pady=10)
+        tk.Label(frame1, text="Player 1:", font=("Helvetica", 14)).pack(side="left", padx=5)
+        self.entry_p1 = tk.Entry(frame1, width=25)
+        self.entry_p1.pack(side="left", padx=5)
+
+        # Player 2 (only if needed)
+        if self.num_players == 2:
+            frame2 = tk.Frame(self)
+            frame2.pack(pady=10)
+            tk.Label(frame2, text="Player 2:", font=("Helvetica", 14)).pack(side="left", padx=5)
+            self.entry_p2 = tk.Entry(frame2, width=25)
+            self.entry_p2.pack(side="left", padx=5)
+
+        tk.Button(self, text="Next", font=("Helvetica", 14),
+                  command=self.go_step3_songs).pack(pady=20)
+
+    # ============================================================
+    # STEP 3 — Song selection
+    # ============================================================
+    def go_step3_songs(self):
+        self.player1 = self.entry_p1.get().strip() or "Player 1"
+        if self.num_players == 2:
+            self.player2 = self.entry_p2.get().strip() or "Player 2"
+
+        self.clear_window()
+
+        tk.Label(self, text="Choose a Song", font=("Helvetica", 18, "bold")).pack(pady=15)
+
         self.song_var = tk.StringVar(value=SONGS[0][1])
 
         for display, path in SONGS:
-            rb = tk.Radiobutton(
-                self,
-                text=display,
-                value=path,
-                variable=self.song_var,
-            )
-            rb.pack(anchor="w", padx=40)
+            tk.Radiobutton(
+                self, text=display, value=path, variable=self.song_var,
+                font=("Helvetica", 14)
+            ).pack(anchor="w", padx=40)
 
-        # Buttons
-        btn_frame = tk.Frame(self)
-        btn_frame.pack(pady=20)
+        tk.Button(self, text="Start!", font=("Helvetica", 16, "bold"),
+                  command=self.start_dance).pack(pady=25)
 
-        start_btn = tk.Button(
-            btn_frame,
-            text="Start Dance",
-            command=self.start_selected_song,
-            width=15,
-        )
-        start_btn.pack(side="left", padx=5)
-
-        leaderboard_btn = tk.Button(
-            btn_frame,
-            text="View Leaderboard",
-            command=self.open_leaderboard,
-            width=18,
-        )
-        leaderboard_btn.pack(side="left", padx=5)
-
-        quit_btn = tk.Button(
-            self,
-            text="Quit",
-            command=self.destroy,
-            width=10,
-        )
-        quit_btn.pack(pady=5)
-
-    def start_selected_song(self):
-        # Original tutorial video path (slow, full version)
+    # ============================================================
+    # STEP 4 — Run game (1P or 2P)
+    # ============================================================
+    def start_dance(self):
         original_video_path = self.song_var.get()
-
         if not os.path.exists(original_video_path):
-            messagebox.showerror("Error", f"Original video not found:\n{original_video_path}")
+            messagebox.showerror("Error", "Song video not found.")
             return
 
-        # Map to fast video/audio/precompute paths
         fast_video, fast_audio, fast_angles, fast_keypoints = get_fast_paths(original_video_path)
 
-        # Auto-generate fast versions if missing
-        if not os.path.exists(fast_video) or not os.path.exists(fast_audio) \
-        or not os.path.exists(fast_angles) or not os.path.exists(fast_keypoints):
-
-            messagebox.showinfo(
-                "Preparing...",
-                "Optimizing video, audio, and precompute files.\n\n"
-                "This happens only the first time."
-            )
-
-            optimize_song(original_video_path)  # <-- this creates EVERYTHING automatically
-
-            # re-fetch paths because new files now exist
+        if not all(os.path.exists(p) for p in [fast_video, fast_audio, fast_angles, fast_keypoints]):
+            optimize_song(original_video_path)
             fast_video, fast_audio, fast_angles, fast_keypoints = get_fast_paths(original_video_path)
 
-
-        player_name = self.entry_name.get().strip() or "Player"
-
+        # --- RUN MODE ---
         try:
-            controller = JustDanceController(
-                reference_video=fast_video,
-                audio_file=fast_audio,
-                reference_angles_path=fast_angles,
-                reference_keypoints_path=fast_keypoints,
-                camera_index=0,
-            )
+            if self.num_players == 1:
+                controller = JustDanceController(
+                    reference_video=fast_video,
+                    audio_file=fast_audio,
+                    reference_angles_path=fast_angles,
+                    reference_keypoints_path=fast_keypoints,
+                    camera_index=0,
+                )
+                score = controller.run_game(show_window=True)
 
-            score = controller.run_game(show_window=True)
+                save_score(self.player1, os.path.basename(original_video_path), score)
+
+                messagebox.showinfo("Result", f"{self.player1}, your score: {score:.1f}")
+
+            else:
+                controller = JustDanceController2P(
+                    reference_video=fast_video,
+                    audio_file=fast_audio,
+                    reference_angles_path=fast_angles,
+                    reference_keypoints_path=fast_keypoints,
+                    camera_index=0,
+                )
+                p1, p2 = controller.run_game(show_window=True)
+
+                save_score(self.player1 + " (P1)", os.path.basename(original_video_path), p1)
+                save_score(self.player2 + " (P2)", os.path.basename(original_video_path), p2)
+
+                messagebox.showinfo(
+                    "Results",
+                    f"{self.player1} (P1): {p1:.1f}\n{self.player2} (P2): {p2:.1f}"
+                )
 
         except Exception as e:
             messagebox.showerror("Error", f"Something went wrong:\n{e}")
             return
 
-        # Save score and notify
-        song_display = os.path.basename(original_video_path)
-        save_score(player_name, song_display, score)
-
-        messagebox.showinfo(
-            "Dance finished!",
-            f"{player_name}, your final score is: {score:.1f}",
-        )
-
-        # Show leaderboard after each game
         self.open_leaderboard()
 
+    # ============================================================
     def open_leaderboard(self):
         Score(self)
+
+    def clear_window(self):
+        for widget in self.winfo_children():
+            widget.destroy()
 
 
 def main():
